@@ -3,22 +3,14 @@ import time
 import sys
 
 # CONFIGURATION
-SERIAL_PORT = 'COM3'   # <--- CHANGE THIS to your actual port (e.g. 'COM3', '/dev/ttyUSB0')
+SERIAL_PORT = 'COM5'   # Make sure this matches what worked for calibration!
 BAUD_RATE = 115200
-CALIBRATION_TIME = 10  # Seconds to measure baseline
+CALIBRATION_TIME = 10 
 
 def count_peaks(data_points, sampling_rate_est=0.02):
-    """
-    Simple algorithm to count heartbeats in a list of raw values.
-    Returns the calculated BPM.
-    """
-    if not data_points:
-        return 0
+    if not data_points: return 0
     
-    # Dynamic threshold: (Max + Min) / 2
-    # This centers the "cut line" exactly in the middle of your wave
     threshold = (max(data_points) + min(data_points)) / 2
-    
     peaks = 0
     below_threshold = True
     
@@ -29,7 +21,6 @@ def count_peaks(data_points, sampling_rate_est=0.02):
         elif not below_threshold and val < threshold:
             below_threshold = True
             
-    # Calculate BPM: (Peaks / Seconds) * 60
     duration_sec = len(data_points) * sampling_rate_est
     if duration_sec == 0: return 0
     
@@ -46,92 +37,89 @@ except Exception as e:
 
 print("\n--- LOVE/LIE DETECTOR SETUP ---")
 print("1. Relax and place finger on sensor.")
-print("2. Wait a few seconds for the signal to stabilize.")
-input("3. Press ENTER to start Calibration (10 seconds)...")
+input("2. Press ENTER to start Calibration...")
 
 # --- CALIBRATION PHASE ---
 print("\n[CALIBRATING] Do not move...")
 start_time = time.time()
 cal_data = []
 
-# Clear buffer to remove old data
+# Clear buffer once at start
 ser.reset_input_buffer()
 
 while time.time() - start_time < CALIBRATION_TIME:
-    if ser.in_waiting > 0:
-        try:
-            line = ser.readline().decode('utf-8').strip()
-            if line.isdigit():
-                cal_data.append(int(line))
-        except:
-            pass
+    try:
+        # forcing a read prevents "skipping" loops
+        line = ser.readline().decode('utf-8').strip()
+        if line.isdigit():
+            cal_data.append(int(line))
+    except:
+        pass
 
-# Analyze Calibration
 if len(cal_data) == 0:
-    print("Error: No data received. Check wiring or port!")
+    print("Error: No data received during calibration.")
     sys.exit()
 
-# Estimate actual sampling rate from calibration data
+# Calculate Baseline
 seconds_elapsed = time.time() - start_time
 sample_rate = seconds_elapsed / len(cal_data) 
 baseline_bpm = count_peaks(cal_data, sample_rate)
 
 print(f"\n[DONE] Baseline Heart Rate: {baseline_bpm} BPM")
 print("------------------------------------------------")
-print("Starting Live Lie Detection... (Ctrl+C to stop)")
-time.sleep(2)
+print("Starting Live Lie Detection...")
+print("(Updates once per second to prevent crashing)")
+time.sleep(1)
 
 # --- LIVE DETECTION LOOP ---
 buffer = []
-BUFFER_SIZE = 100  # Holds ~2 seconds of data (at 20ms delay)
+BUFFER_SIZE = 100 
+bpm_history = []
+HISTORY_SIZE = 50 
 
-bpm_history = []   # List to store recent BPMs for smoothing
-HISTORY_SIZE = 50  # How many recent BPMs to average
-
-print("Waiting for buffer to fill...")
+counter = 0 # Counter to slow down printing
 
 while True:
-    if ser.in_waiting > 0:
-        try:
-            line = ser.readline().decode('utf-8').strip()
-            if line.isdigit():
-                val = int(line)
-                buffer.append(val)
+    try:
+        # Blocking read - waits for data
+        line = ser.readline().decode('utf-8').strip()
+        
+        if line.isdigit():
+            val = int(line)
+            buffer.append(val)
+            
+            # 1. Fill the Buffer
+            if len(buffer) > BUFFER_SIZE:
+                buffer.pop(0)
                 
-                # Keep buffer a fixed size (rolling window)
-                if len(buffer) > BUFFER_SIZE:
-                    buffer.pop(0)
-                    
-                    # --- 1. Calculate Instant BPM ---
-                    # Based only on the last ~2 seconds of data
-                    current_bpm = count_peaks(buffer, sample_rate)
-                    
-                    # --- 2. Calculate Smoothed Average BPM ---
-                    # Add current reading to history
-                    bpm_history.append(current_bpm)
-                    if len(bpm_history) > HISTORY_SIZE:
-                        bpm_history.pop(0)
-                    
-                    # Compute average of history
-                    avg_bpm = int(sum(bpm_history) / len(bpm_history))
-                    
-                    # --- 3. Lie Detection Logic ---
-                    # Using the SMOOTHED average is more stable than instant spikes
-                    status = "TRUTH"
-                    if avg_bpm > (baseline_bpm * 1.15):
-                        status = "!!! LIE DETECTED !!!"
-                    
-                    # Print formatted output
-                    # \r overwrites the line, flush=True forces it to screen immediately
-                    print(f"Base: {baseline_bpm} | Inst: {current_bpm} | Avg: {avg_bpm} | {status}      ", end='\r', flush=True)
+                # 2. Process Data
+                current_bpm = count_peaks(buffer, sample_rate)
                 
-                else:
-                    # Show progress bar while buffer fills up (~2 seconds)
-                    pct = int((len(buffer) / BUFFER_SIZE) * 100)
-                    print(f"Reading sensor... {pct}% buffer filled", end='\r', flush=True)
+                bpm_history.append(current_bpm)
+                if len(bpm_history) > HISTORY_SIZE:
+                    bpm_history.pop(0)
+                
+                avg_bpm = int(sum(bpm_history) / len(bpm_history))
+                
+                # 3. Lie Logic
+                status = "TRUTH"
+                if avg_bpm > (baseline_bpm * 1.15):
+                    status = "!!! LIE DETECTED !!!"
+                
+                # 4. PRINT ONLY ONCE EVERY 50 SAMPLES (Approx 1 second)
+                counter += 1
+                if counter >= 50:
+                    print(f"Base: {baseline_bpm} | Inst: {current_bpm} | Avg: {avg_bpm} | {status}")
+                    counter = 0
+            
+            else:
+                # While buffer is filling, print every 10 samples so you see progress
+                if len(buffer) % 10 == 0:
+                    print(f"Buffering... {len(buffer)}/{BUFFER_SIZE}")
 
-        except KeyboardInterrupt:
-            print("\nExiting...")
-            break
-        except Exception as e:
-            print(f"\nError: {e}")
+    except KeyboardInterrupt:
+        print("\nExiting...")
+        break
+    except Exception as e:
+        # Print error but keep going
+        print(f"Error: {e}")
