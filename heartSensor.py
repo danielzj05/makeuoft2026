@@ -3,7 +3,7 @@ import time
 import sys
 
 # CONFIGURATION
-SERIAL_PORT = 'COM3'  # CHANGE THIS to your Arduino Port (e.g., 'COM3' or '/dev/ttyUSB0')
+SERIAL_PORT = 'COM3'  # CHANGE THIS to your Arduino Port
 BAUD_RATE = 115200
 CALIBRATION_TIME = 10  # Seconds to measure baseline
 
@@ -16,7 +16,6 @@ def count_peaks(data_points, sampling_rate_est=0.02):
         return 0
     
     # dynamic threshold: (Max + Min) / 2
-    # This centers the "cut line" exactly in the middle of your wave
     threshold = (max(data_points) + min(data_points)) / 2
     
     peaks = 0
@@ -30,7 +29,6 @@ def count_peaks(data_points, sampling_rate_est=0.02):
             below_threshold = True
             
     # Calculate BPM: (Peaks / Seconds) * 60
-    # We estimate time based on the number of samples collected
     duration_sec = len(data_points) * sampling_rate_est
     if duration_sec == 0: return 0
     
@@ -55,7 +53,6 @@ print("\n[CALIBRATING] Do not move...")
 start_time = time.time()
 cal_data = []
 
-# Clear buffer to remove old data
 ser.reset_input_buffer()
 
 while time.time() - start_time < CALIBRATION_TIME:
@@ -68,7 +65,10 @@ while time.time() - start_time < CALIBRATION_TIME:
             pass
 
 # Analyze Calibration
-# Estimate sampling rate (how fast Arduino sends data) for better BPM math
+if len(cal_data) == 0:
+    print("Error: No data received from sensor!")
+    sys.exit()
+
 seconds_elapsed = time.time() - start_time
 sample_rate = seconds_elapsed / len(cal_data) 
 baseline_bpm = count_peaks(cal_data, sample_rate)
@@ -80,7 +80,11 @@ time.sleep(2)
 
 # --- LIVE DETECTION LOOP ---
 buffer = []
-BUFFER_SIZE = 100 # Keep a rolling window of data
+BUFFER_SIZE = 100  # Raw data window
+
+# NEW: History for smoothing the BPM display
+bpm_history = [] 
+HISTORY_SIZE = 50  # How many recent BPM calculations to average
 
 while True:
     if ser.in_waiting > 0:
@@ -90,22 +94,37 @@ while True:
                 val = int(line)
                 buffer.append(val)
                 
-                # Keep buffer a fixed size (rolling window)
+                # Keep raw data buffer fixed size
                 if len(buffer) > BUFFER_SIZE:
                     buffer.pop(0)
                     
-                    # Calculate Live BPM on this small window
+                    # 1. Calculate Instant BPM on this window
                     current_bpm = count_peaks(buffer, sample_rate)
                     
-                    # Logic: If heart rate spikes 15% above baseline -> LIE
+                    # 2. Add to history for smoothing
+                    bpm_history.append(current_bpm)
+                    if len(bpm_history) > HISTORY_SIZE:
+                        bpm_history.pop(0)
+                    
+                    # 3. Calculate Sliding Window Average of BPM
+                    if len(bpm_history) > 0:
+                        avg_bpm = int(sum(bpm_history) / len(bpm_history))
+                    else:
+                        avg_bpm = 0
+                    
+                    # Logic: Check for Lie
                     status = "TRUTH"
-                    if current_bpm > (baseline_bpm * 1.15):
+                    # We compare the SMOOTHED average to baseline for better stability
+                    # Or you can keep comparing current_bpm if you want it very sensitive
+                    if avg_bpm > (baseline_bpm * 1.15):
                         status = "!!! LIE DETECTED !!!"
                     
-                    print(f"Base: {baseline_bpm} | Current: {current_bpm} | {status}", end='\r')
+                    # Display both Current (Instant) and Avg (Smoothed)
+                    print(f"Base: {baseline_bpm} | Inst: {current_bpm} | Avg: {avg_bpm} | {status}", end='\r')
                     
         except KeyboardInterrupt:
             print("\nExiting...")
             break
-        except:
+        except Exception as e:
+            # Good to catch errors without crashing loop
             pass
