@@ -6,7 +6,7 @@ from collections import deque
 # --- CONFIGURATION ---
 # CHANGE 'COM3' to your actual port (e.g., '/dev/ttyUSB0' on Mac)
 SERIAL_PORT = 'COM3' 
-BAUD_RATE = 115200 # Must match your Arduino Serial.begin()
+BAUD_RATE = 115200 
 
 # --- SETUP ---
 try:
@@ -20,27 +20,30 @@ data_heart = deque([0] * 200, maxlen=200)
 
 # Setup Plot
 fig, ax = plt.subplots()
-line, = ax.plot(data_heart, color='red')
+line, = ax.plot(data_heart, color='red') # 'line' is defined here as the GRAPH object
 ax.set_ylim(0, 1024)
 ax.set_title("Live Heart Rate Signal")
 
 def animate(i):
     if ser.in_waiting:
         try:
-            # Read line: "Signal 512"
-            line = ser.readline().decode('utf-8').strip()
+            # --- FIX: Renamed variable from 'line' to 'serial_text' ---
+            serial_text = ser.readline().decode('utf-8').strip()
             
-            # Parse logic: Split by space and take the last part
             # "Signal 512" -> ["Signal", "512"] -> 512
-            if "Signal" in line:
-                val_str = line.split(" ")[-1] # Grab the number part
+            if "Signal" in serial_text:
+                val_str = serial_text.split(" ")[-1] 
                 val = int(val_str)
                 
                 data_heart.append(val)
+                
+                # Now 'line' correctly refers to the global graph object
                 line.set_ydata(data_heart)
+                
         except ValueError:
             pass
     return line,
 
-ani = animation.FuncAnimation(fig, animate, interval=20)
+# Added cache_frame_data=False to fix the UserWarning you saw
+ani = animation.FuncAnimation(fig, animate, interval=20, cache_frame_data=False)
 plt.show()
