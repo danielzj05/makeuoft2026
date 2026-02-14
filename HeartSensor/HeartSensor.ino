@@ -36,10 +36,10 @@ void setup() {
 // The Main Loop Function
 void loop() {
 
-  Signal = analogRead(PulseSensorPurplePin);  // Read the PulseSensor's value.
+  int Signal = analogRead(PulseSensorPurplePin);  // Read the PulseSensor's value.
   // Assign this value to the "Signal" variable.
 
-  Serial.println("Signal " + String(Signal));  // Send "reading " followed by the Signal value to Serial Plotter.
+  Serial.println(Signal);  // Send "reading " followed by the Signal value to Serial Plotter.
 
   delay(20);
 }
